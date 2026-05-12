@@ -73,20 +73,21 @@ def _assign_split(dates: pd.Series) -> pd.Series:
 def _compute_prec_accumulados(df: pd.DataFrame) -> pd.DataFrame:
     """Calcula precipitación acumulada a 7 y 14 días por celda.
 
-    Args:
-        df: DataFrame con columnas cell_id, date, PRECTOTCORR. Ordenado por
-            (cell_id, date).
-
-    Returns:
-        df con columnas adicionales prec_acc7d, prec_acc14d.
+    Usa pivot para operar como matriz (fechas × celdas) y aplicar rolling
+    vectorizado — evita el loop implícito de groupby+transform sobre 136M filas.
     """
     df = df.sort_values(["cell_id", "date"]).reset_index(drop=True)
-    df["prec_acc7d"] = df.groupby("cell_id")["PRECTOTCORR"].transform(
-        lambda s: s.rolling(window=7, min_periods=1).sum()
-    )
-    df["prec_acc14d"] = df.groupby("cell_id")["PRECTOTCORR"].transform(
-        lambda s: s.rolling(window=14, min_periods=1).sum()
-    )
+
+    pivot = df.pivot(index="date", columns="cell_id", values="PRECTOTCORR")
+    acc7 = pivot.rolling(window=7, min_periods=1).sum()
+    acc14 = pivot.rolling(window=14, min_periods=1).sum()
+
+    acc7_flat = acc7.stack().rename("prec_acc7d")
+    acc14_flat = acc14.stack().rename("prec_acc14d")
+    acc_df = pd.concat([acc7_flat, acc14_flat], axis=1).reset_index()
+    acc_df.columns = ["date", "cell_id", "prec_acc7d", "prec_acc14d"]
+
+    df = df.merge(acc_df, on=["cell_id", "date"], how="left")
     return df
 
 

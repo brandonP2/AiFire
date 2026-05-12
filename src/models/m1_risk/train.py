@@ -29,7 +29,6 @@ import pandas as pd
 import typer
 import yaml
 from loguru import logger
-from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import (
     average_precision_score,
     f1_score,
@@ -40,6 +39,7 @@ from sklearn.metrics import (
 
 from src.data.config import Settings
 from src.data.config import settings as default_settings
+from src.models.m1_risk import CalibratedModel
 
 app = typer.Typer(add_completion=False)
 
@@ -309,7 +309,7 @@ def train_lightgbm(
     """
     from lightgbm import LGBMClassifier, early_stopping, log_evaluation
 
-    scale_pos_weight = _compute_scale_pos_weight(y_train)
+    scale_pos_weight = 1.0  # SMOTE ya balanceó las clases
     logger.info(f"LightGBM: scale_pos_weight={scale_pos_weight:.1f}")
 
     model = LGBMClassifier(
@@ -326,7 +326,7 @@ def train_lightgbm(
         eval_set=[(X_val, y_val)],
         eval_metric="average_precision",
         feature_name=feature_names,
-        callbacks=[early_stopping(50, verbose=False), log_evaluation(100)],
+        callbacks=[early_stopping(30, verbose=False), log_evaluation(50)],
     )
     logger.info(f"LightGBM: mejor iteración = {model.best_iteration_}")
     return model
@@ -337,22 +337,32 @@ def calibrate_model(
     X_val: np.ndarray,
     y_val: np.ndarray,
     method: str = "isotonic",
-) -> CalibratedClassifierCV:
-    """Calibra las probabilidades del modelo usando Platt scaling o isotónica.
+) -> CalibratedModel:
+    """Calibra las probabilidades del modelo usando regresión isotónica o Platt.
 
     Args:
         model: Modelo base ya entrenado.
         X_val: Features del conjunto de calibración.
         y_val: Etiquetas del conjunto de calibración.
-        method: 'sigmoid' (Platt) o 'isotonic'.
+        method: 'isotonic' o 'sigmoid' (Platt scaling).
 
     Returns:
-        CalibratedClassifierCV ajustado sobre X_val/y_val.
+        _CalibratedModel listo para predict_proba.
     """
+    from sklearn.isotonic import IsotonicRegression
+    from sklearn.linear_model import LogisticRegression
+
     logger.info(f"Calibrando probabilidades ({method})...")
-    calibrated = CalibratedClassifierCV(model, method=method, cv="prefit")
-    calibrated.fit(X_val, y_val)
-    return calibrated
+    raw_proba = model.predict_proba(X_val)[:, 1]
+
+    if method == "isotonic":
+        calibrator = IsotonicRegression(out_of_bounds="clip")
+        calibrator.fit(raw_proba, y_val)
+    else:
+        calibrator = LogisticRegression()
+        calibrator.fit(raw_proba.reshape(-1, 1), y_val)
+
+    return CalibratedModel(model, calibrator)
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +379,7 @@ def train_m1(
     use_smote: bool = True,
     smote_strategy: float = 0.1,
     calibration_method: str = "isotonic",
-    threshold: float = 0.5,
+    threshold: float = 0.05,
 ) -> dict[str, dict[str, float]]:
     """Entrena y evalúa el modelo M1.
 
@@ -398,8 +408,19 @@ def train_m1(
     X_train, y_train, X_val, y_val, X_test, y_test = _load_splits(dataset_path)
 
     # Features disponibles (columnas del parquet que coinciden con FEATURE_COLS)
-    dataset_cols = set(pd.read_parquet(dataset_path, columns=[]).columns)
+    import pyarrow.parquet as pq
+    dataset_cols = set(pq.read_schema(str(dataset_path)).names)
     available_features = [c for c in FEATURE_COLS if c in dataset_cols]
+
+    # Descartar features completamente NaN (ej. NDVI sin datos descargados)
+    all_nan_mask = np.isnan(X_train).all(axis=0)
+    if all_nan_mask.any():
+        dropped = [f for f, drop in zip(available_features, all_nan_mask) if drop]
+        logger.warning(f"Descartando {len(dropped)} features completamente NaN: {dropped}")
+        available_features = [f for f, drop in zip(available_features, all_nan_mask) if not drop]
+        X_train = X_train[:, ~all_nan_mask]
+        X_val = X_val[:, ~all_nan_mask]
+        X_test = X_test[:, ~all_nan_mask]
 
     # SMOTE
     if use_smote:
@@ -508,7 +529,7 @@ def main(
     threshold: Annotated[
         float,
         typer.Option("--threshold", help="Umbral de clasificación"),
-    ] = 0.5,
+    ] = 0.05,
     log_level: Annotated[
         str,
         typer.Option("--log-level", help="Nivel de logging"),
