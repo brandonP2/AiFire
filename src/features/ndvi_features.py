@@ -82,7 +82,11 @@ def _extract_ndvi_from_tif(
         rows = np.asarray(rows, dtype=int)
         cols = np.asarray(cols, dtype=int)
 
-        data = src.read(1).astype(float)
+        raw = src.read(1)
+        # Si el raster ya está en float (valores en [-1, 1]), no aplicar escala.
+        # MODIS entero (int16) requiere * NDVI_SCALE; float32 ya está escalado.
+        is_float_raster = np.issubdtype(raw.dtype, np.floating)
+        data = raw.astype(float)
         valid_mask = (
             (rows >= 0) & (rows < data.shape[0]) & (cols >= 0) & (cols < data.shape[1])
         )
@@ -91,7 +95,11 @@ def _extract_ndvi_from_tif(
         vr, vc = rows[valid_mask], cols[valid_mask]
         sampled = data[vr, vc]
         # Aplicar escala y filtrar no-datos
-        sampled = np.where(sampled == nodata, np.nan, sampled * NDVI_SCALE)
+        if is_float_raster:
+            # Ya está en unidades reales de NDVI; solo filtrar NaN/nodata
+            sampled = np.where(np.isnan(sampled), np.nan, sampled)
+        else:
+            sampled = np.where(sampled == nodata, np.nan, sampled * NDVI_SCALE)
         values[valid_mask] = sampled
 
     return pd.Series(values, index=cell_ids, name="ndvi")
@@ -116,7 +124,7 @@ def _discover_ndvi_tifs(ndvi_dir: Path) -> dict[date, Path]:
     result: dict[date, Path] = {}
     for tif in sorted(ndvi_dir.glob("ndvi_*.tif")):
         stem = tif.stem  # "ndvi_2023-03-14"
-        date_str = stem.replace("ndvi_", "")
+        date_str = stem.replace("ndvi_", "").replace("_", "-")
         try:
             d = date.fromisoformat(date_str)
             result[d] = tif

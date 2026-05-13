@@ -1,87 +1,118 @@
-# Handoff — PetenFire
+# Handoff — PetenFire (Orquestador)
 
 ## Meta
 
-Llevar el sistema PetenFire a **predecir incendios forestales en tiempo real** en el departamento del Petén, Guatemala. Esto significa:
-1. Un modelo M1 que produzca probabilidades de ignición útiles por celda de 1 km² cada día.
-2. Un pipeline que descargue datos nuevos automáticamente cada día y regenere el mapa.
-3. Un dashboard Streamlit que muestre el mapa del día actual sin intervención manual.
+Llevar el sistema PetenFire a **predecir incendios forestales en tiempo real** en el departamento del Petén, Guatemala:
+1. M1 — Mapa de riesgo diario de ignición por celda de 1 km².
+2. M2 — Simulación de propagación del fuego.
+3. M3 — Detección visual de focos activos sobre imágenes Sentinel-2.
+
+Desarrollo por fases: M1 → M2 → M3. Sin fecha límite, prioridad en calidad.
 
 ---
 
-## Estado actual del proyecto (2026-05-11)
+## Plan de orquestación M1
 
-### Lo que ya funciona
-- **Infraestructura completa:** grilla 1 km × 1 km del Petén construida, pipelines de descarga operativos.
-- **Dataset M1:** 58 millones de filas (celdas × días, 2018–2024), con clima, FWI, topografía y etiquetas de fuego. Contiene **87,659 pares celda-día con fuego** confirmado.
-- **Modelo LightGBM entrenado y guardado** en `models_artifacts/m1/m1_lightgbm_calibrated.joblib`.
-- **Dashboard Streamlit funcional** con mapa de calor interactivo, superposición FIRMS y análisis de estacionalidad.
-- **Tests unitarios** en verde.
+```
+STAGE 1 — NDVI (bloqueante)
+  ✅ 1A: Validar descarga (2024) — COMPLETADO
+  ✅ 1B: Descarga completa 2018-2024 — COMPLETADO (184 tifs, 274 MB + 40 MB 2024 = ~314 MB total)
+  ✅ 1C: Build NDVI features + Merge → m1_dataset.parquet — COMPLETADO (99.6% NDVI no-nulo)
+
+STAGE 2 — Reentrenamiento en Colab
+  ✅ 2A: Notebook anual base — COMPLETADO (AUC-ROC 0.888, AUC-PR 0.007, F1 0.023)
+  ✅ 2B: Diagnóstico feature importance — COMPLETADO
+  ❌ 2C: Modelo seasonal (mar-may) — DESCARTADO (AUC-ROC bajó a 0.752, best_iteration=1)
+  ✅ 2D: Fire_lag features construidas — COMPLETADO (46 MB, 136M filas, anti-leakage OK)
+  ✅ 2E: Notebook definitivo (anual + fire_lag) — COMPLETADO (notebooks/colab_train_m1_final.ipynb, 27 features, ~3GB RAM Colab)
+
+STAGE 3 — Validación M1
+  ⬜ AUC-PR > 0.10 | F1 > 0.20 | best_iteration > 1
+
+STAGE 4 — Pipeline diario
+  ⬜ Descarga automática clima + NDVI
+  ⬜ Inferencia diaria sobre grilla Petén
+  ⬜ Dashboard muestra mapa del día actual
+
+### Lecciones aprendidas (no repetir)
+- Estrategia seasonal EMPEORA el modelo: el contraste temporada/no-temporada era información valiosa
+- early_stopping con average_precision en val sets pequeños dispara en iteración 1
+- El gap real es ESPACIAL (no temporal): fire_lag features son el fix correcto
+```
+
+---
+
+## Estado actual (2026-05-12)
+
+### Stage 1A — COMPLETADO ✅
+
+**Resultado:** Script GEE funciona correctamente.
+
+- 23 GeoTIFFs descargados para 2024 en `data/interim/ndvi/`
+- Tamaño: ~40 MB por año, ~280 MB total para 7 años
+- CRS: EPSG:32616 ✓ | Shape: 877×1001 px a 250m ✓
+- NDVI range: [-0.198, 0.999] float32, 0% NaN ✓
+
+**Fix aplicado:** `GEE_PRIVATE_KEY_PATH` en `.env.local` tenía el path del proyecto anterior (Desktop). Corregido a la ruta actual.
+
+**Script a usar:** `src/data/download_ndvi_gee.py` (GEE, no Earthdata)
+- Razón: descarga solo el bbox del Petén (~2 MB/archivo vs 400 MB HDF globales)
+
+---
 
 ### Lo que NO funciona aún
-- **El modelo no detecta incendios reales:** AUC-PR = 0.004, F1 = 0.0. En la práctica no emitiría ninguna alerta útil.
-- **NDVI sin datos:** las columnas `ndvi`, `ndvi_lag7`, `ndvi_lag14` son todas NaN porque los GeoTIFFs de MODIS/GEE no se descargaron.
-- **M2 (propagación) y M3 (detección visual):** módulos vacíos, no implementados.
-- **Sin pipeline de actualización diaria:** no hay automatización que descargue datos nuevos y regenere el mapa cada día.
+
+- **NDVI sin datos en el dataset:** las columnas `ndvi`, `ndvi_lag7`, `ndvi_lag14` son 100% NaN en `data/processed/m1_dataset.parquet` — Stage 1B/1C lo resuelve.
+- **Modelo no detecta incendios:** AUC-PR = 0.004, F1 = 0.0 — se resuelve en Stage 2.
+- **Sin pipeline diario:** no hay automatización — Stage 4.
+- **M2 y M3:** módulos vacíos — fases posteriores.
 
 ---
 
-## Todo lo que se intentó y falló
+## Decisiones de arquitectura
 
-### Intento 1 — Reentrenar con datos originales (2022–2024)
-- **Qué se hizo:** se entrenó LightGBM con el dataset que ya existía.
-- **Resultado:** AUC-PR = 0.004, F1 = 0.0. Sin cambio respecto al modelo inicial.
-- **Por qué falló:** el dataset solo cubría 2022–2024 y el entrenamiento no tenía suficiente historia de fuego.
-
-### Intento 2 — Descargar FIRMS 2018–2021 y reentrenar
-- **Qué se hizo:** se descargaron 70,000 focos históricos adicionales (tardó 6 horas), se reconstruyó el dataset y se reentrenó.
-- **Resultado:** AUC-PR = 0.004, F1 = 0.0. Idéntico al intento anterior.
-- **Por qué falló:** hay un bug en el código de entrenamiento — LightGBM se detiene en la iteración 1 porque se aplican SMOTE y `scale_pos_weight` simultáneamente (doble corrección del desbalance), y la métrica de early stopping (`auc`) no es apropiada para clases tan raras. El modelo aprende algo en la primera iteración y luego nunca mejora.
+| Decisión | Elección | Razón |
+|----------|----------|-------|
+| Descarga NDVI | GEE (`download_ndvi_gee.py`) | 200× más pequeño que HDF globales |
+| Compute entrenamiento | Google Colab Free | Mac se reinicia con 136M filas + SMOTE |
+| Estrategia balanceo | Subsampleo 10:1 (no SMOTE) | SMOTE sobre 136M filas agota RAM |
+| Validación temporal | train 2018-2022 / val 2023 / test 2024 | Series temporales — no K-fold aleatorio |
 
 ---
 
-## Siguiente paso
+## Credenciales y paths críticos
 
-Corregir tres líneas en `src/models/m1_risk/train.py` y reentrenar:
+| Recurso | Ubicación |
+|---------|-----------|
+| GEE service account JSON | `vast-bounty-495706-h0-4c1b23a8148f.json` (root del proyecto) |
+| GEE_PRIVATE_KEY_PATH | `.env.local` — apunta al JSON anterior |
+| Earthdata user/pass | `.env` — EARTHDATA_USER / EARTHDATA_PASS |
+| FIRMS API key | `.env` — FIRMS_MAP_KEY |
+| Dataset M1 | `data/processed/m1_dataset.parquet` (766 MB, 136M filas) |
+| Modelo actual (roto) | `models_artifacts/m1/m1_lightgbm_calibrated.joblib` |
 
-### Corrección 1 — Quitar la doble corrección de desbalance
-En la función `train_lightgbm`, donde se calcula `scale_pos_weight`:
-```python
-# Línea actual (~312):
-scale_pos_weight = _compute_scale_pos_weight(y_train)
+---
 
-# Cambiar a:
-scale_pos_weight = 1.0  # SMOTE ya balanceó las clases
-```
+## Próximo comando exacto (Stage 1B)
 
-### Corrección 2 — Cambiar la métrica de early stopping
-En la misma función, en el `model.fit`:
-```python
-# Línea actual (~328):
-eval_metric="auc",
-
-# Cambiar a:
-eval_metric="average_precision",
-```
-
-### Corrección 3 — Bajar el umbral de clasificación
-En la función `train_m1`, en la firma de la función:
-```python
-# Línea actual (~382):
-threshold: float = 0.5,
-
-# Cambiar a:
-threshold: float = 0.05,
-```
-
-### Comando para reentrenar tras los cambios:
 ```bash
-uv run python -m src.models.m1_risk.train
+uv run python -m src.data.download_ndvi_gee --start 2018 --end 2024
 ```
 
-### Criterio de éxito:
-- `auc_pr` en val > 0.10
-- `f1` en val > 0.20
-- `mejor iteración` debe ser > 1 (confirma que el modelo realmente entrenó)
+Tiempo estimado: ~5-6 minutos. Resultado esperado: ~161 GeoTIFFs en `data/interim/ndvi/`.
 
-Si las métricas pasan ese umbral, el siguiente paso es construir el pipeline de actualización diaria.
+---
+
+## Historial de intentos fallidos (no repetir)
+
+### Intento 1 — Reentrenar con datos originales (2022-2024)
+- Resultado: AUC-PR = 0.004, F1 = 0.0
+- Causa: dataset cubría solo 3 años, insuficiente historia
+
+### Intento 2 — Descargar FIRMS 2018-2021 y reentrenar
+- Resultado: AUC-PR = 0.004, F1 = 0.0 (idéntico)
+- Causa: bug en training — SMOTE + scale_pos_weight simultáneos (doble corrección), métrica early stopping `auc` inapropiada para clases tan raras, modelo se detiene en iteración 1
+
+### Intento 3 — Entrenar localmente con dataset completo (136M filas)
+- Resultado: Mac se reinicia por falta de RAM
+- Causa: 136M filas + SMOTE requiere ~15-20 GB RAM

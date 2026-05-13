@@ -19,11 +19,13 @@ Uso:
 from __future__ import annotations
 
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Annotated, Literal
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import typer
 from loguru import logger
 
@@ -70,22 +72,46 @@ def _assign_split(dates: pd.Series) -> pd.Series:
 # ---------------------------------------------------------------------------
 
 
-def _compute_prec_accumulados(df: pd.DataFrame) -> pd.DataFrame:
+def _compute_prec_accumulados(
+    df: pd.DataFrame,
+    prefix_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Calcula precipitación acumulada a 7 y 14 días por celda.
 
     Usa pivot para operar como matriz (fechas × celdas) y aplicar rolling
-    vectorizado — evita el loop implícito de groupby+transform sobre 136M filas.
-    """
-    df = df.sort_values(["cell_id", "date"]).reset_index(drop=True)
+    vectorizado. Cuando se proporciona prefix_df (últimos 14 días del año
+    anterior), el rolling queda correctamente inicializado en el límite de año.
 
-    pivot = df.pivot(index="date", columns="cell_id", values="PRECTOTCORR")
+    Args:
+        df: DataFrame del año a procesar (cell_id, date, PRECTOTCORR, …).
+        prefix_df: Tail del año anterior con columnas (cell_id, date, PRECTOTCORR).
+
+    Returns:
+        df con columnas prec_acc7d y prec_acc14d añadidas.
+    """
+    prec_cols = ["cell_id", "date", "PRECTOTCORR"]
+    if prefix_df is not None and not prefix_df.empty:
+        combined = pd.concat(
+            [prefix_df[prec_cols], df[prec_cols]], ignore_index=True
+        )
+    else:
+        combined = df[prec_cols].copy()
+
+    combined = combined.sort_values(["cell_id", "date"]).reset_index(drop=True)
+    pivot = combined.pivot(index="date", columns="cell_id", values="PRECTOTCORR")
     acc7 = pivot.rolling(window=7, min_periods=1).sum()
     acc14 = pivot.rolling(window=14, min_periods=1).sum()
 
-    acc7_flat = acc7.stack().rename("prec_acc7d")
-    acc14_flat = acc14.stack().rename("prec_acc14d")
-    acc_df = pd.concat([acc7_flat, acc14_flat], axis=1).reset_index()
-    acc_df.columns = ["date", "cell_id", "prec_acc7d", "prec_acc14d"]
+    # Conservar solo las fechas del año actual
+    current_dates = df["date"].unique()
+    acc7 = acc7.loc[acc7.index.isin(current_dates)]
+    acc14 = acc14.loc[acc14.index.isin(current_dates)]
+
+    acc7_flat = acc7.stack().rename("prec_acc7d").reset_index()
+    acc14_flat = acc14.stack().rename("prec_acc14d").reset_index()
+    acc7_flat.columns = ["date", "cell_id", "prec_acc7d"]
+    acc14_flat.columns = ["date", "cell_id", "prec_acc14d"]
+    acc_df = acc7_flat.merge(acc14_flat, on=["date", "cell_id"])
 
     df = df.merge(acc_df, on=["cell_id", "date"], how="left")
     return df
@@ -172,154 +198,143 @@ def build_m1_dataset(
         static_df = build_static_features(cfg=cfg, grid_path=grid_path, output_path=static_path)
 
     # ------------------------------------------------------------------
-    # Paso 2: Features climáticas + FWI
+    # Paso 2: Asegurar datos intermedios generados
     # ------------------------------------------------------------------
     logger.info("Paso 2: Procesando clima y FWI...")
     build_climate_features(cfg=cfg, start=start, end=end, grid_path=grid_path)
-    climate_df = _load_parquets(cfg.data_interim / "climate", "climate_features_*.parquet")
-    if climate_df is None:
-        raise RuntimeError(
-            "No se generaron features climáticas. "
-            "Verifica que existan archivos en data/raw/power/."
-        )
 
-    # Filtrar al rango solicitado
-    climate_df["date"] = pd.to_datetime(climate_df["date"]).dt.date
-    climate_df = climate_df[
-        (climate_df["date"] >= start) & (climate_df["date"] <= end)
-    ]
-    logger.info(f"Clima: {len(climate_df):,} filas ({climate_df['date'].nunique()} días)")
-
-    # ------------------------------------------------------------------
-    # Paso 3: NDVI diario + lags
-    # ------------------------------------------------------------------
-    logger.info("Paso 3: Procesando NDVI...")
+    logger.info("Paso 3: Procesando NDVI (si hay GeoTIFFs disponibles)...")
     build_ndvi_features(cfg=cfg, start=start, end=end, grid_path=grid_path)
-    ndvi_df = _load_parquets(cfg.data_interim / "ndvi", "ndvi_features_*.parquet")
 
-    if ndvi_df is not None:
-        ndvi_df["date"] = pd.to_datetime(ndvi_df["date"]).dt.date
-        ndvi_df = ndvi_df[
-            (ndvi_df["date"] >= start) & (ndvi_df["date"] <= end)
-        ]
-        logger.info(f"NDVI: {len(ndvi_df):,} filas")
-    else:
-        logger.warning("Sin datos NDVI disponibles — columnas NDVI serán NaN")
-
-    # ------------------------------------------------------------------
-    # Paso 4: Etiquetas FIRMS
-    # ------------------------------------------------------------------
     logger.info("Paso 4: Generando etiquetas de incendio...")
     build_fire_labels(cfg=cfg, start=start, end=end, grid_path=grid_path)
-    fire_df = _load_parquets(cfg.data_interim / "fire_labels", "fire_labels_*.parquet")
 
-    if fire_df is not None:
-        fire_df["date"] = pd.to_datetime(fire_df["date"]).dt.date
-        fire_df = fire_df[
-            (fire_df["date"] >= start) & (fire_df["date"] <= end)
+    # ------------------------------------------------------------------
+    # Paso 5: Ensamblado año por año (evita cargar 136M filas de golpe)
+    # ------------------------------------------------------------------
+    logger.info("Paso 5: Ensamblando dataset año por año...")
+
+    ordered_cols = [
+        "cell_id", "date", "fire_occurred",
+        "T2M", "RH2M", "WS10M", "PRECTOTCORR",
+        "fwi", "ffmc_val", "dmc_val", "dc_val", "isi_val", "bui_val",
+        "prec_acc7d", "prec_acc14d",
+        "ndvi", "ndvi_lag7", "ndvi_lag14",
+        "elevation_m", "slope_deg", "aspect_deg",
+        "dist_roads_km", "dist_settlements_km", "is_protected_area",
+        "month", "day_of_year", "year",
+        "split",
+    ]
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    writer: pq.ParquetWriter | None = None
+    total_rows = 0
+    total_fire = 0
+
+    years = list(range(start.year, end.year + 1))
+    prev_climate_tail: pd.DataFrame | None = None  # últimos 14 días del año anterior
+
+    for year in years:
+        year_start = max(start, date(year, 1, 1))
+        year_end = min(end, date(year, 12, 31))
+
+        climate_path = cfg.data_interim / "climate" / f"climate_features_{year}.parquet"
+        if not climate_path.exists():
+            logger.warning(f"  {year}: sin datos de clima — saltando")
+            prev_climate_tail = None
+            continue
+
+        logger.info(f"  Ensamblando {year}...")
+
+        # Cargar clima del año y filtrar al rango
+        climate_df = pd.read_parquet(climate_path)
+        climate_df["date"] = pd.to_datetime(climate_df["date"]).dt.date
+        climate_df = climate_df[
+            (climate_df["date"] >= year_start) & (climate_df["date"] <= year_end)
         ]
-        logger.info(f"Incendios: {len(fire_df):,} pares (celda, día) con fuego")
-    else:
-        logger.warning("Sin datos FIRMS disponibles — fire_occurred será False por defecto")
 
-    # ------------------------------------------------------------------
-    # Paso 5: Ensamblado
-    # ------------------------------------------------------------------
-    logger.info("Paso 5: Ensamblando dataset final...")
+        # Precipitación acumulada usando cola del año anterior para el rolling
+        climate_df = _compute_prec_accumulados(climate_df, prefix_df=prev_climate_tail)
 
-    # Base: clima (cubre todas las celdas x todos los dias)
-    df = climate_df.copy()
-
-    # Unir NDVI
-    if ndvi_df is not None:
-        df = df.merge(
-            ndvi_df[["cell_id", "date", "ndvi", "ndvi_lag7", "ndvi_lag14"]],
-            on=["cell_id", "date"],
-            how="left",
+        # Guardar cola de este año para el siguiente (últimos 14 días)
+        tail_cutoff = year_end - timedelta(days=14)
+        prev_climate_tail = (
+            pd.read_parquet(climate_path, columns=["cell_id", "date", "PRECTOTCORR"])
+            .assign(date=lambda d: pd.to_datetime(d["date"]).dt.date)
+            .pipe(lambda d: d[d["date"] >= tail_cutoff])
         )
-    else:
+
+        df = climate_df.copy()
+        del climate_df
+
+        # FWI: renombrar si viene como fwi_val
+        if "fwi_val" in df.columns:
+            df = df.rename(columns={"fwi_val": "fwi"})
+
+        # NDVI (NaN hasta que haya GeoTIFFs descargados)
         df["ndvi"] = float("nan")
         df["ndvi_lag7"] = float("nan")
         df["ndvi_lag14"] = float("nan")
 
-    # Unir etiquetas de incendio
-    if fire_df is not None:
-        df = df.merge(
-            fire_df[["cell_id", "date", "fire_occurred"]],
-            on=["cell_id", "date"],
-            how="left",
-        )
-        df["fire_occurred"] = df["fire_occurred"].fillna(False)
-    else:
-        df["fire_occurred"] = False
+        # Etiquetas de incendio
+        fire_path = cfg.data_interim / "fire_labels" / f"fire_labels_{year}.parquet"
+        if fire_path.exists():
+            fire_df = pd.read_parquet(fire_path)
+            fire_df["date"] = pd.to_datetime(fire_df["date"]).dt.date
+            df = df.merge(
+                fire_df[["cell_id", "date", "fire_occurred"]],
+                on=["cell_id", "date"],
+                how="left",
+            )
+            df["fire_occurred"] = df["fire_occurred"].fillna(False)
+        else:
+            df["fire_occurred"] = False
 
-    # Unir features estáticas
-    df = df.merge(static_df, on="cell_id", how="left")
+        # Features estáticas
+        df = df.merge(static_df, on="cell_id", how="left")
 
-    # ------------------------------------------------------------------
-    # Paso 6: Features derivadas temporales
-    # ------------------------------------------------------------------
-    df["date"] = pd.to_datetime(df["date"])
-    df["month"] = df["date"].dt.month
-    df["day_of_year"] = df["date"].dt.dayofyear
-    df["year"] = df["date"].dt.year
-    df["date"] = df["date"].dt.date
+        # Features temporales
+        df["date"] = pd.to_datetime(df["date"])
+        df["month"] = df["date"].dt.month
+        df["day_of_year"] = df["date"].dt.dayofyear
+        df["year"] = df["date"].dt.year
+        df["date"] = df["date"].dt.date
 
-    # Precipitación acumulada
-    df = _compute_prec_accumulados(df)
-
-    # FWI ya viene calculado desde climate_features (columna fwi_val)
-    if "fwi_val" in df.columns:
-        df = df.rename(columns={"fwi_val": "fwi"})
-
-    # Asignar split
-    df["split"] = _assign_split(df["date"])
-
-    # ------------------------------------------------------------------
-    # Orden final de columnas (según CellDayRecord)
-    # ------------------------------------------------------------------
-    ordered_cols = [
-        "cell_id", "date", "fire_occurred",
-        # Clima
-        "T2M", "RH2M", "WS10M", "PRECTOTCORR",
-        # FWI
-        "fwi", "ffmc_val", "dmc_val", "dc_val", "isi_val", "bui_val",
-        # Precipitación acumulada
-        "prec_acc7d", "prec_acc14d",
-        # Vegetación
-        "ndvi", "ndvi_lag7", "ndvi_lag14",
-        # Topografía
-        "elevation_m", "slope_deg", "aspect_deg",
-        # Antrópico
-        "dist_roads_km", "dist_settlements_km", "is_protected_area",
-        # Temporal
-        "month", "day_of_year", "year",
         # Split
-        "split",
-    ]
-    # Incluir solo las columnas que existan
-    final_cols = [c for c in ordered_cols if c in df.columns]
-    # Añadir columnas extra que no estén en el orden definido
-    extra_cols = [c for c in df.columns if c not in ordered_cols]
-    df = df[final_cols + extra_cols]
+        df["split"] = _assign_split(df["date"])
 
-    # ------------------------------------------------------------------
-    # Guardar
-    # ------------------------------------------------------------------
-    n_rows = len(df)
-    n_fire = df["fire_occurred"].sum()
-    fire_rate = 100 * n_fire / n_rows if n_rows > 0 else 0.0
+        # Orden final de columnas
+        final_cols = [c for c in ordered_cols if c in df.columns]
+        extra_cols = [c for c in df.columns if c not in ordered_cols]
+        df = df[final_cols + extra_cols]
 
-    logger.info(f"Dataset M1: {n_rows:,} filas x {df.shape[1]} columnas")
-    logger.info(f"  Distribución de clases: {n_fire:,} fuego ({fire_rate:.2f}%), "
-                f"{n_rows - n_fire:,} sin fuego")
-    logger.info(f"  Splits: {df.groupby('split').size().to_dict()}")
+        # Escribir al parquet de salida (append con ParquetWriter)
+        table = pa.Table.from_pandas(df, preserve_index=False)
+        if writer is None:
+            writer = pq.ParquetWriter(output_path, table.schema, compression="snappy")
+        writer.write_table(table)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(output_path, index=False)
+        n_fire_year = int(df["fire_occurred"].sum())
+        total_rows += len(df)
+        total_fire += n_fire_year
+        logger.info(f"    {year}: {len(df):,} filas, {n_fire_year:,} focos de fuego")
+
+        del df, table
+        import gc
+        gc.collect()
+
+    if writer is not None:
+        writer.close()
+
+    fire_rate = 100 * total_fire / total_rows if total_rows > 0 else 0.0
+    logger.info(f"Dataset M1: {total_rows:,} filas totales")
+    logger.info(
+        f"  Distribución: {total_fire:,} fuego ({fire_rate:.2f}%), "
+        f"{total_rows - total_fire:,} sin fuego"
+    )
     logger.success(f"Dataset guardado en {output_path}")
 
-    return df
+    return pd.read_parquet(output_path)
 
 
 # ---------------------------------------------------------------------------
