@@ -196,9 +196,9 @@ def build_fire_history_features(
         ValueError:         Si el CRS del grid no es EPSG:32616.
         MemoryError:        Si no hay suficiente RAM para los arrays intermedios.
     """
-    dataset_path = dataset_path or (settings.data_dir / "processed" / "m1_dataset.parquet")
-    grid_path = grid_path or (settings.data_dir / "interim" / "peten_grid.gpkg")
-    output_path = output_path or (settings.data_dir / "interim" / "fire_lag_features.parquet")
+    dataset_path = dataset_path or (settings.data_processed / "m1_dataset.parquet")
+    grid_path = grid_path or (settings.data_interim / "peten_grid.gpkg")
+    output_path = output_path or (settings.data_interim / "fire_lag_features.parquet")
 
     t0 = time.time()
 
