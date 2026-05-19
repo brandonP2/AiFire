@@ -36,6 +36,8 @@ dependencies = [
     "xgboost>=2.0",
     "lightgbm>=4.3",
     "catboost>=1.2",
+    "shap>=0.44",
+    "imbalanced-learn>=0.12",
     # Visualización / Dashboard
     "matplotlib>=3.8",
     "seaborn>=0.13",
