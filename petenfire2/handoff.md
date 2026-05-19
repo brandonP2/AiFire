@@ -22,8 +22,8 @@ petenfire2 es la versión 2 de petenfire: predicción de riesgo de incendios for
 | 2 | `step2_exploration.ipynb` | **COMPLETO** |
 | 3 | `step3_preprocess.ipynb` | **COMPLETO** |
 | 4 | `step4_exploration_transformed.ipynb` | **COMPLETO** |
-| 5 | `step5_feature_selection.ipynb` | **PENDIENTE** ← siguiente |
-| 6 | `step6_model_selection.ipynb` | Pendiente |
+| 5 | `step5_feature_selection.ipynb` | **COMPLETO** |
+| 6 | `step6_model_selection.ipynb` | **PENDIENTE** ← siguiente |
 | 7 | `step7_train.ipynb` | Pendiente |
 | 8 | `step8_register.ipynb` | Pendiente |
 
@@ -102,7 +102,7 @@ uv run mlflow ui --port 5000
 uv run jupyter lab notebooks/
 ```
 
-**Próximo paso:** Ejecutar `step5_feature_selection.ipynb` para ranking y selección de features.
+**Próximo paso:** Ejecutar `step6_model_selection.ipynb` para evaluar base learners individuales.
 
 ---
 
@@ -120,13 +120,35 @@ uv run jupyter lab notebooks/
 
 ---
 
+## Hallazgos de Step 5 (feature selection)
+
+- **Top features por importancia (LightGBM):**
+  1. `elevation_m` — altitud (más discriminativa)
+  2. `dist_roads_km` — distancia a carreteras
+  3. `dist_settlements_km` — distancia a asentamientos
+  4. `slope_deg` — pendiente del terreno
+  5. `aspect_deg` — orientación
+  6. `ndvi` — vegetación
+
+- **Métricas del modelo de ranking (muestra balanceada, NO final):**
+  - AUC-ROC: 0.9688
+  - AUC-PR: 0.9234
+  - F1: 0.4014
+
+- **24 features seleccionadas** (todas las actuales — no hay exceso que recortar)
+- **Features guardadas:** `data/processed/selected_features.json`
+
+---
+
 ## Commits en rama petenfire2
 
 1. `fa55cc7` — feat(petenfire2): Initial commit
 2. `f0e1f75` — feat(petenfire2): Complete step3 preprocessing
 3. `ab19fc0` — docs(petenfire2): Update handoff after step3
 4. `1459678` — feat(petenfire2): Complete step4 validation
+5. `19dbf36` — docs(petenfire2): Update handoff after step4
+6. `666dba0` — feat(petenfire2): Complete step5 feature selection
 
 ---
 
-*Handoff actualizado: 2026-05-18. Steps 1-4 completados.*
+*Handoff actualizado: 2026-05-18. Steps 1-5 completados.*
