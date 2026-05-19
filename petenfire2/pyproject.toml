@@ -32,6 +32,7 @@ dependencies = [
     "planetary-computer>=1.0",
     # ML - Stacking Ensemble
     "scikit-learn>=1.4",
+    "category-encoders>=2.6",
     "xgboost>=2.0",
     "lightgbm>=4.3",
     "catboost>=1.2",
