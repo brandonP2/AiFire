@@ -14,6 +14,21 @@ petenfire2 es la versión 2 de petenfire: predicción de riesgo de incendios for
 
 ---
 
+## Estado honesto: qué hay y qué no hay
+
+**Steps 1–5 son infraestructura, no modelos.** Lo que existe hasta ahora:
+- Pipeline de preprocesamiento funcionando sin OOM
+- Datos limpios particionados (train/val/test)
+- Ranking de features
+
+**No existe ningún modelo entrenado.** `models_artifacts/` está vacío.
+
+Las métricas de Step 5 (AUC-PR 0.92) son en una muestra artificialmente balanceada — no son representativas del problema real (0.06% positivos).
+
+**El trabajo real de ML empieza en Step 6.** Ahí es donde v2 puede demostrar que supera a v1 (AUC-PR 0.007).
+
+---
+
 ## Estado actual del pipeline de 8 notebooks
 
 | # | Notebook | Estado |
