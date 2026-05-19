@@ -1,0 +1,212 @@
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.python-version
+
+# uv
+uv.lock
+.uv/
+
+# pip
+pip-log.txt
+pip-delete-this-directory.txt
+
+# =============================================================================
+# Tests / cobertura / linters
+# =============================================================================
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# =============================================================================
+# Jupyter Notebooks
+# =============================================================================
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+profile_default/
+ipython_config.py
+*.nbconvert.ipynb
+
+# =============================================================================
+# IDEs / Editores
+# =============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.spyderproject
+.spyproject
+.ropeproject
+
+# =============================================================================
+# Datos — NUNCA commitear datasets pesados
+# =============================================================================
+data/raw/
+data/interim/
+data/processed/
+data/external/
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+
+# =============================================================================
+# Datos geoespaciales (formatos pesados)
+# =============================================================================
+*.tif
+*.tiff
+*.geotiff
+*.nc
+*.nc4
+*.hdf
+*.hdf5
+*.h5
+*.zarr/
+*.grib
+*.grib2
+*.bil
+*.img
+
+# Vectoriales
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.qpj
+*.sbn
+*.sbx
+*.gpkg
+*.gpkg-journal
+*.geojson
+*.kml
+*.kmz
+*.gdb/
+*.mdb
+
+# Tiles / imágenes satelitales
+*.jp2
+*.SAFE/
+*.zip.aria2
+tiles/
+
+# =============================================================================
+# Modelos entrenados (pesados)
+# =============================================================================
+*.pkl
+*.joblib
+*.pt
+*.pth
+*.onnx
+*.h5
+*.pb
+*.tflite
+*.safetensors
+models_artifacts/
+checkpoints/
+runs/
+mlruns/
+wandb/
+lightning_logs/
+
+# =============================================================================
+# Reportes generados
+# =============================================================================
+reports/coverage/
+reports/figures/*.png
+reports/figures/*.pdf
+reports/maps/*.html
+!reports/.gitkeep
+
+# =============================================================================
+# Secrets y credenciales
+# =============================================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+service-account*.json
+vast-bounty*.json
+*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*.json
+.cdsapirc
+.netrc
+.earthdatarc
+
+# =============================================================================
+# Streamlit
+# =============================================================================
+.streamlit/secrets.toml
+
+# =============================================================================
+# Logs
+# =============================================================================
+*.log
+logs/
+*.log.*
+
+# =============================================================================
+# Sistema operativo
+# =============================================================================
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.gstack/

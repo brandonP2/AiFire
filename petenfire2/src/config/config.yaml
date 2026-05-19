@@ -1,0 +1,84 @@
+# ============================================================================
+# CONFIGURACION DEL PROYECTO petenfire2 - MLflow Edition
+# ============================================================================
+project_name: petenfire2
+project_description: Prediccion de riesgo de incendios forestales en Peten, Guatemala - Stacking Ensemble
+
+# project_folder se calcula automaticamente con project_config.py
+bus: experiment-petenfire2
+
+# ----------------------------------------------------------------------------
+# DATOS
+# ----------------------------------------------------------------------------
+data:
+  columns_to_drop:
+    - date        # No es feature, es indice temporal
+    - cell_id     # ID de celda, no feature
+
+  key_columns:
+    - cell_id
+    - date
+
+  raw:
+    local_path: data/raw
+    format: parquet
+
+  processed:
+    local_path: data/processed
+    format: parquet
+
+  predictions:
+    local_path: data/predictions
+    format: parquet
+
+  # Split temporal - NO aleatorio
+  temporal_split:
+    date_column: date
+    train_end: "2022-12-31"
+    val_start: "2023-01-01"
+    val_end: "2023-12-31"
+    test_start: "2024-01-01"
+    test_end: "2024-12-31"
+
+# ----------------------------------------------------------------------------
+# MODELO
+# ----------------------------------------------------------------------------
+model:
+  objective_column: fire_occurred
+  random_state: 42
+  test_size: null  # NO se usa - usamos temporal_split
+
+  fixed_features:
+    - fwi          # Fire Weather Index
+    - ndvi         # Vegetacion
+
+  # Threshold strategy: max_recall (falsos negativos son costosos)
+  threshold_strategy: max_recall
+  min_precision: 0.20
+  min_recall: 0.25
+
+  # Balanceo - class_weight, NO SMOTE
+  class_weight: balanced
+  under_sampling_ratio: 0.10  # 10:1 negativo:positivo
+
+# ----------------------------------------------------------------------------
+# MLFLOW
+# ----------------------------------------------------------------------------
+mlflow:
+  tracking_uri: http://localhost:5000
+  experiment_name: petenfire2-stacking
+  registry_name: petenfire2-risk-classifier
+  user_name: petenfire-team
+  default_tags:
+    team: data-science
+    project: petenfire2
+    environment: development
+  enable_system_metrics: true
+  system_metrics_interval: 5
+  enable_tracing: false
+
+# ----------------------------------------------------------------------------
+# POSTGRESQL (no se usa - datos vienen de parquet)
+# ----------------------------------------------------------------------------
+postgresql:
+  enabled: false
