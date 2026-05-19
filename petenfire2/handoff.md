@@ -20,9 +20,9 @@ petenfire2 es la versión 2 de petenfire: predicción de riesgo de incendios for
 |---|----------|--------|
 | 1 | `step1_load_data.ipynb` | **COMPLETO** |
 | 2 | `step2_exploration.ipynb` | **COMPLETO** |
-| 3 | `step3_preprocess.ipynb` | **COMPLETO** (ejecutado 2026-05-18) |
-| 4 | `step4_exploration_transformed.ipynb` | **PENDIENTE** ← siguiente |
-| 5 | `step5_feature_selection.ipynb` | Pendiente |
+| 3 | `step3_preprocess.ipynb` | **COMPLETO** |
+| 4 | `step4_exploration_transformed.ipynb` | **COMPLETO** |
+| 5 | `step5_feature_selection.ipynb` | **PENDIENTE** ← siguiente |
 | 6 | `step6_model_selection.ipynb` | Pendiente |
 | 7 | `step7_train.ipynb` | Pendiente |
 | 8 | `step8_register.ipynb` | Pendiente |
@@ -102,15 +102,31 @@ uv run mlflow ui --port 5000
 uv run jupyter lab notebooks/
 ```
 
-**Próximo paso:** Ejecutar `step4_exploration_transformed.ipynb` para validar que el preprocesamiento se hizo correctamente.
+**Próximo paso:** Ejecutar `step5_feature_selection.ipynb` para ranking y selección de features.
+
+---
+
+## Hallazgos de Step 4 (validación post-transform)
+
+- **Sin nulos** en ningún split
+- **Rangos razonables** para todas las features
+- **Top correlaciones con target:**
+  - `year` (+0.68) — 2023/2024 tienen más fuegos proporcionalmente
+  - `RH2M` (-0.55) — humedad negativa (esperado)
+  - `dist_settlements_km` (-0.54) — más fuegos cerca de asentamientos
+  - `T2M` (+0.49) — temperatura positiva (esperado)
+  - `isi_val` (+0.48), `fwi` (+0.47) — índices de riesgo de fuego (esperado)
+- **Balance preservado** entre splits (~0.06% positivos en cada uno)
 
 ---
 
 ## Commits en rama petenfire2
 
-1. `fa55cc7` — feat(petenfire2): Initial commit - stacking ensemble approach v2
-2. `f0e1f75` — feat(petenfire2): Complete step3 preprocessing with batch strategy
+1. `fa55cc7` — feat(petenfire2): Initial commit
+2. `f0e1f75` — feat(petenfire2): Complete step3 preprocessing
+3. `ab19fc0` — docs(petenfire2): Update handoff after step3
+4. `1459678` — feat(petenfire2): Complete step4 validation
 
 ---
 
-*Handoff actualizado: 2026-05-18. Step 3 completado exitosamente.*
+*Handoff actualizado: 2026-05-18. Steps 1-4 completados.*
